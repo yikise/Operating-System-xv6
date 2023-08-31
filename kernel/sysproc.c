@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -74,6 +75,35 @@ sys_sleep(void)
 }
 
 uint64
+sys_trace(void)
+{
+  int n;
+  // 获得参数mask
+  if(argint(0, &n) < 0) {
+    return -1;
+  }
+  myproc()->mask = n; // 设置该程序的mask
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  struct sysinfo sinfo;
+  struct proc *p = myproc();
+  uint64 addr;
+
+  sinfo.freemem = countFreemem();
+  sinfo.nproc = procUnused();
+  sinfo.freefd = countFreefd();
+
+  if(argaddr(0, &addr) < 0) return -1;
+  if(copyout(p->pagetable, addr, (char *)&sinfo, sizeof(sinfo)) < 0)
+    return -1;
+  return 0;
+}
+
+uint64
 sys_kill(void)
 {
   int pid;
@@ -95,3 +125,4 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+

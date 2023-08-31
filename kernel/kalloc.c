@@ -80,3 +80,21 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+// 计算空闲页的大小
+int
+countFreemem(void)
+{
+  struct run *r;
+  int cnt = 0;
+  acquire(&kmem.lock); // 锁住内存管理结构
+  r = kmem.freelist; // r 为空闲表的表头
+  //开始计算空闲表的页数
+  while(r) {
+    r = r->next;
+    cnt++;
+  }
+
+  release(&kmem.lock); // 解锁
+  return cnt * PGSIZE;
+}
