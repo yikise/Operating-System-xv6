@@ -39,6 +39,7 @@ procinit(void)
         panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      p->kstack_pa = (uint64)pa; // 将内核栈的物理地址拷贝到kstack_pa中
       p->kstack = va;
   }
   kvminithart();
@@ -120,19 +121,54 @@ found:
     release(&p->lock);
     return 0;
   }
-
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  //设置内核页表，并将内核栈映射到页表中
+  pagetable_t k_pagetable = kvm_independent_init();
+  // 映射内核栈
+  ikvmmap(k_pagetable, p->kstack, p->kstack_pa, PGSIZE, PTE_R | PTE_W);
+  //在p->k_pagetable中存储k_pagetable
+  p->k_pagetable = k_pagetable;
+  
   return p;
+  
 }
 
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+
+void
+freegrandchild(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+void
+freechild(pagetable_t pagetable)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 grandchild = PTE2PA(pte);
+      freegrandchild((pagetable_t)grandchild);
+      pagetable[i] = 0;
+    }
+  }
+  kfree((void*)pagetable);
+}
+
 static void
 freeproc(struct proc *p)
 {
@@ -150,7 +186,20 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  //释放对应的内核页表
+  for(int i = 0; i < 512; i++){
+    pte_t pte = p->k_pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freechild((pagetable_t)child);
+      p->k_pagetable[i] = 0;  
+    }
+  }
+  kfree((void*)p->k_pagetable);
 }
+
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -472,13 +521,16 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
-        c->proc = p;
+        c->proc = p; // 此处切换了线程
+        //切换内核页表
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
-
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0; // cpu dosen't run any process now
-
+        //当没有线程运行时，载入全局的内核页表
+        kvminithart();
         found = 1;
       }
       release(&p->lock);
