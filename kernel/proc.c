@@ -138,6 +138,26 @@ found:
   
 }
 
+// 把进程的用户页表映射到内核页表中
+
+// void
+// user2kernelpage(struct proc *p)
+// {
+//   pagetable_t user_pagetable = p->pagetable;
+//   pagetable_t k_pagetable = p->k_pagetable;
+//   int cnt = 0;
+//   for(int i = 0; i < 512; i++) {
+//     pte_t pte = k_pagetable[i];
+//     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+//       // this PTE points to a lower-level page table.
+//       uint64 child = PTE2PA(pte);
+//       for(int j = 0; j < 512; j++) {
+//         if()
+//       }
+//     }
+//   }
+// }
+
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
