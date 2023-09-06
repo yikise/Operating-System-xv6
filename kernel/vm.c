@@ -103,20 +103,27 @@ kvminithart()
 pte_t *
 walk(pagetable_t pagetable, uint64 va, int alloc)
 {
+  // 因此这里输入进的pagetable是根页表，输出的结果是叶子页表中va对应的的pte
   if(va >= MAXVA)
     panic("walk");
 
   for(int level = 2; level > 0; level--) {
+    // PX返回的是va对应level的页表的索引
+    // pagetable[]是va对应的那一行页表项 将地址赋值给pte
     pte_t *pte = &pagetable[PX(level, va)];
+    // 如果该页表项有效 就把该pte里下一个页表的pa赋值给pagetable
     if(*pte & PTE_V) {
       pagetable = (pagetable_t)PTE2PA(*pte);
     } else {
+      //若该页表项无效，则用kalloc分配一块地址给pagetable
+      //再将该地址转换为pte赋值给这个pte，令该页表项有效
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
       memset(pagetable, 0, PGSIZE);
       *pte = PA2PTE(pagetable) | PTE_V;
     }
   }
+  //返回va对应的叶子页表的pte的地址
   return &pagetable[PX(0, va)];
 }
 
@@ -189,14 +196,17 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
   uint64 a, last;
   pte_t *pte;
-
-  a = PGROUNDDOWN(va);
-  last = PGROUNDDOWN(va + size - 1);
+  // 疑问：为什么要把va取成PGSIZE的倍数？
+  a = PGROUNDDOWN(va); // 将最接近va的页表大小的倍数向下赋值给a
+  last = PGROUNDDOWN(va + size - 1); // 将最接近va + size - 1的页表大小的倍数向下赋值给a
   for(;;){
+    // 将va=a的叶子页表的pte项的地址赋值给pte
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
     if(*pte & PTE_V)
       panic("remap");
+    // 让pte内容变成pa+perm+PTE_V
+    // 是完成映射 叶子页表-->PA的过程
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -274,7 +284,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   if(newsz < oldsz)
     return oldsz;
 
-  oldsz = PGROUNDUP(oldsz);
+  oldsz = PGROUNDUP(oldsz); //取接近oldsz向上取整的PGSIZE的倍数
   for(a = oldsz; a < newsz; a += PGSIZE){
     mem = kalloc();
     if(mem == 0){
@@ -419,24 +429,35 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
+  return copyin_new(pagetable, dst, srcva, len);
+  // w_sstatus(r_sstatus() | SSTATUS_SUM);
+  // if(copyin_new(pagetable, dst, srcva, len) == 0) {
+  //   w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  //   return 0;
+  // } else {
+  //   w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  //   return -1;
+  // }
 
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+  // uint64 n, va0, pa0;
 
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  // while(len > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > len)
+  //     n = len;
+  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+
+  //   len -= n;
+  //   dst += n;
+  //   srcva = va0 + PGSIZE;
+  // }
+  // return 0;
 }
+
 
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
@@ -445,40 +466,50 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
+  return copyinstr_new(pagetable, dst, srcva, max);
+  // w_sstatus(r_sstatus() | SSTATUS_SUM);
+  // if(copyinstr_new(pagetable, dst, srcva, max) == 0) {
+  //   w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  //   return 0;
+  // } else {
+  //   w_sstatus(r_sstatus() & ~SSTATUS_SUM);
+  //   return -1;
+  // }
 
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
+  // uint64 n, va0, pa0;
+  // int got_null = 0;
 
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
+  // while(got_null == 0 && max > 0){
+  //   va0 = PGROUNDDOWN(srcva);
+  //   pa0 = walkaddr(pagetable, va0);
+  //   if(pa0 == 0)
+  //     return -1;
+  //   n = PGSIZE - (srcva - va0);
+  //   if(n > max)
+  //     n = max;
 
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  //   char *p = (char *) (pa0 + (srcva - va0));
+  //   while(n > 0){
+  //     if(*p == '\0'){
+  //       *dst = '\0';
+  //       got_null = 1;
+  //       break;
+  //     } else {
+  //       *dst = *p;
+  //     }
+  //     --n;
+  //     --max;
+  //     p++;
+  //     dst++;
+  //   }
+
+  //   srcva = va0 + PGSIZE;
+  // }
+  // if(got_null){
+  //   return 0;
+  // } else {
+  //   return -1;
+  // }
 }
 
 // check if use global kpgtbl or not 
@@ -531,24 +562,3 @@ vmprint(pagetable_t pagetable)
     }  
   }
 }
-
-
-
-
-// void
-// freewalk(pagetable_t pagetable)
-// {
-//   // there are 2^9 = 512 PTEs in a page table.
-//   for(int i = 0; i < 512; i++){
-//     pte_t pte = pagetable[i];
-//     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
-//       // this PTE points to a lower-level page table.
-//       uint64 child = PTE2PA(pte);
-//       freewalk((pagetable_t)child);
-//       pagetable[i] = 0;  
-//     } else if(pte & PTE_V){
-//       panic("freewalk: leaf");
-//     }
-//   }
-//   kfree((void*)pagetable);
-// }

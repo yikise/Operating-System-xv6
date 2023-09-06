@@ -121,6 +121,14 @@ exec(char *path, char **argv)
     vmprint(p->pagetable);
   }
 
+  // 修改独立内核页表
+  // user2kernelpage(p);
+  //删除旧的映射并将新页面映射到内核页表
+  uvmunmap(p->k_pagetable, 0, PGROUNDUP(oldsz)/PGSIZE, 0);
+  if(procuvmcopy(p->pagetable, p->k_pagetable, 0, p->sz) < 0)
+   goto bad;
+
+
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:

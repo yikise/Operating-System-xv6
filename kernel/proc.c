@@ -138,25 +138,80 @@ found:
   
 }
 
-// 把进程的用户页表映射到内核页表中
+//该函数将进程的用户页表映射到内核页表中
+
+int 
+procuvmcopy(pagetable_t uvm, pagetable_t kvm, uint64 old_sz, uint64 new_sz){
+ pte_t *pte;
+ uint64 pa, i;
+ uint flags;
+ 
+ old_sz = PGROUNDUP(old_sz);
+ if (new_sz <= old_sz) return 0;
+
+ for(i = old_sz; i < new_sz; i += PGSIZE){
+  if((pte = walk(uvm, i, 0)) == 0) //找到PTE的物理地址
+   panic("procuvmcopy: pte should exist");
+  if((*pte & PTE_V) == 0)
+   panic("procuvmcopy: page not present");
+  
+  // 清除PTE_U的标记位
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+  if(mappages(kvm, i, PGSIZE, pa, flags&(~PTE_U)) != 0){ //调用proc_mappages完成映射,并保存相关信息
+   goto err;
+  }
+ }
+ return 0;
+
+err:
+ uvmunmap(kvm, 0, i / PGSIZE, 1);
+ return -1; 
+}
 
 // void
 // user2kernelpage(struct proc *p)
 // {
 //   pagetable_t user_pagetable = p->pagetable;
 //   pagetable_t k_pagetable = p->k_pagetable;
-//   int cnt = 0;
 //   for(int i = 0; i < 512; i++) {
-//     pte_t pte = k_pagetable[i];
-//     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
-//       // this PTE points to a lower-level page table.
-//       uint64 child = PTE2PA(pte);
+//     pte_t user_pte = user_pagetable[i];
+//     // 当该页表有效时：
+//     if((user_pte & PTE_V) && (user_pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+//       pagetable_t user_sec_pagetable = (pagetable_t)PTE2PA(user_pte);
 //       for(int j = 0; j < 512; j++) {
-//         if()
+//         pte_t user_sec_pte = user_sec_pagetable[j];
+//         // 当该页表有效时：
+//         if((user_sec_pte & PTE_V) && (user_sec_pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+//           //将内核根页表第i个pte指向的次页表的第j个pte变为用户页表指向的
+//           pte_t k_pte = k_pagetable[i];
+//           pagetable_t k_sec_pagetable = (pagetable_t)PTE2PA(k_pte);
+//           pte_t *k_sec_pte = &k_sec_pagetable[j];
+//           *k_sec_pte = user_sec_pte;
+//         }
 //       }
 //     }
 //   }
-// }
+  // 一种失败的做法：
+  // for(int va = 0; va <= p->sz; va += PGSIZE) {
+  //   uint64 a = PGROUNDDOWN(va);
+  //   printf("a:%d, p->size:%d, a+PGSIZE:%d\n", a, p->sz, a + PGSIZE);
+  //   //获得用户页表中va的叶子页表的地址
+  //   pte_t user_pte = user_pagetable[PX(2, a)];
+  //   // 若有效，则继续映射
+  //   if((user_pte & PTE_V) && (user_pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+  //     pagetable_t user_sec_pagetable = (pagetable_t)PTE2PA(user_pagetable[PX(2, a)]);
+  //     pagetable_t user_leaf_pagetable = (pagetable_t)PTE2PA(user_sec_pagetable[PX(1, a)]);
+  //     //将内核页表中次页表的va=i时的pte内容指向用户页表的叶子页表
+  //     pagetable_t k_sec_pagetable = (pagetable_t)PTE2PA(k_pagetable[PX(2, a)]);
+  //     pte_t *pte = &k_sec_pagetable[PX(1, a)];
+  //     *pte = PA2PTE(user_leaf_pagetable) | PTE_V;
+  //     printf("have done once\n");
+  //     printf("user_leaf:%p, kernel:%p\n", user_leaf_pagetable, (pagetable_t)PTE2PA(*pte));
+  //     vmprint(p->pagetable);
+  //   }
+  // }
+//}
 
 // free a proc structure and the data hanging from it,
 // including user pages.
@@ -165,13 +220,15 @@ found:
 void
 freegrandchild(pagetable_t pagetable)
 {
+
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
-    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+    if(pte & PTE_V){ 
       pagetable[i] = 0;
     }
   }
   kfree((void*)pagetable);
+  return;
 }
 
 void
@@ -208,13 +265,14 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 
   //释放对应的内核页表
+  
   for(int i = 0; i < 512; i++){
     pte_t pte = p->k_pagetable[i];
     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
       // this PTE points to a lower-level page table.
       uint64 child = PTE2PA(pte);
       freechild((pagetable_t)child);
-      p->k_pagetable[i] = 0;  
+      p->k_pagetable[i] = 0;
     }
   }
   kfree((void*)p->k_pagetable);
@@ -226,6 +284,8 @@ freeproc(struct proc *p)
 pagetable_t
 proc_pagetable(struct proc *p)
 {
+  //该函数建立了用户根页表
+  //用户只完成了TRAPFRAME和TRAMPOLINE的映射
   pagetable_t pagetable;
 
   // An empty page table.
@@ -250,7 +310,6 @@ proc_pagetable(struct proc *p)
     uvmfree(pagetable, 0);
     return 0;
   }
-
   return pagetable;
 }
 
@@ -298,6 +357,11 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
+  
+  //独立内核页表加上用户页表的映射
+  //user2kernelpage(p);
+  // 包含第一个进程的用户页表
+  procuvmcopy(p->pagetable, p->k_pagetable,0,PGSIZE) ;
 
   release(&p->lock);
 }
@@ -315,10 +379,18 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    // mapper user page to kernel page table
+    if((procuvmcopy(p->pagetable, p->k_pagetable, p->sz, sz)) < 0){
+      return -1;
+    }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uvmunmap(p->k_pagetable,PGROUNDUP(sz),(PGROUNDUP(p->sz)-PGROUNDUP(sz))/PGSIZE,0);
   }
   p->sz = sz;
+
+  // user2kernelpage(p);
+
   return 0;
 }
 
@@ -363,6 +435,15 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
+  //独立内核页表加上用户页表的映射
+  // user2kernelpage(np); 
+  // 父进程用户空间的页表也全部拷贝一遍给子进程
+  if(procuvmcopy(np->pagetable, np->k_pagetable, 0, np->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   release(&np->lock);
 
