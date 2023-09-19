@@ -1,7 +1,7 @@
 #include "kernel/types.h"
 #include "user.h"
 
-void prime_loop(int leftPipe[2]) {
+__attribute__((noreturn)) void prime_loop(int leftPipe[2]) {
     int num;
     read(leftPipe[0], &num, sizeof num); //读入管道左侧的第一个数字
     if(num == -1) exit(0); // 如果是35，退出
